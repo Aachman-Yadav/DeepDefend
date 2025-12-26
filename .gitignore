@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+uploads/*.mp4
+uploads/*.avi
+models/video_model/
+models/audio_model/
+*.log
