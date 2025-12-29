@@ -1,0 +1,32 @@
+# FastAPI and Server
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+pydantic==2.10.2
+
+# Core ML Framework
+torch==2.5.1
+torchvision==0.20.1
+transformers==4.46.3
+
+# Computer Vision
+opencv-python-headless==4.10.0.84
+Pillow==11.0.0
+
+# Audio Processing - Modern compatible versions
+librosa==0.10.1
+soundfile==0.12.1
+audioread==3.0.1
+
+# LLM Integration
+langchain==0.3.7
+langchain-google-genai==2.0.5
+google-generativeai==0.8.3
+
+# Data Processing
+numpy==1.26.4
+scipy==1.14.1
+
+# Utilities
+requests==2.32.3
+python-dotenv==1.0.1
