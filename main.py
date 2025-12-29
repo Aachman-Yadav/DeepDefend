@@ -209,4 +209,236 @@ async def analyze_video(
         }
         
         add_to_history(analysis_data)
+
+        interval_data = {
+            'analysis_id': analysis_id,
+            'timeline': [
+                {
+                    'interval_id': interval['interval_id'],
+                    'interval': interval['interval'],
+                    'start': interval['start'],
+                    'end': interval['end'],
+                    'video_results': interval.get('video_results'),
+                    'audio_results': interval.get('audio_results')
+                }
+                for interval in results.get('timeline', [])
+            ]
+        }
+        
+        results_path = UPLOAD_DIR / f"{analysis_id}_results.json"
+        with open(results_path, 'w') as f:
+            json.dump(interval_data, f, indent=2)
+        
+        return AnalysisResult(**analysis_data)
+    
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+    
+    finally:
+        if video_path.exists():
+            os.remove(video_path)
+
+@app.get("/api/history", response_model=List[HistoryItem])
+async def get_history(limit: int = Query(default=10, ge=1, le=50)):
+    """Get recent analysis history"""
+    return [
+        HistoryItem(
+            analysis_id=item["analysis_id"],
+            filename=item["filename"],
+            verdict=item["verdict"],
+            confidence=item["confidence"],
+            timestamp=item["timestamp"],
+            video_duration=item["video_duration"]
+        )
+        for item in analysis_history[:limit]
+    ]
+
+@app.get("/api/stats", response_model=StatsResponse)
+async def get_stats():
+    """Get overall statistics"""
+    
+    if not analysis_history:
+        return StatsResponse(
+            total_analyses=0,
+            deepfakes_detected=0,
+            real_videos=0,
+            avg_confidence=0.0,
+            avg_video_score=0.0,
+            avg_audio_score=0.0
+        )
+    
+    deepfakes = sum(1 for item in analysis_history if item["verdict"] == "DEEPFAKE")
+    real = len(analysis_history) - deepfakes
+    
+    avg_confidence = sum(item["confidence"] for item in analysis_history) / len(analysis_history)
+    avg_video = sum(item["overall_scores"]["overall_video_score"] for item in analysis_history) / len(analysis_history)
+    avg_audio = sum(item["overall_scores"]["overall_audio_score"] for item in analysis_history) / len(analysis_history)
+    
+    return StatsResponse(
+        total_analyses=len(analysis_history),
+        deepfakes_detected=deepfakes,
+        real_videos=real,
+        avg_confidence=round(avg_confidence, 2),
+        avg_video_score=round(avg_video, 3),
+        avg_audio_score=round(avg_audio, 3)
+    )
+
+@app.get("/api/intervals/{analysis_id}")
+async def get_interval_details(analysis_id: str):
+    """Get detailed interval-by-interval breakdown"""
+    
+    results_path = UPLOAD_DIR / f"{analysis_id}_results.json"
+    
+    if not results_path.exists():
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    
+    with open(results_path, 'r') as f:
+        interval_data = json.load(f)
+    
+    timeline = interval_data.get('timeline', [])
+    
+    intervals = []
+    for interval in timeline:
+        video_res = interval.get('video_results', {})
+        audio_res = interval.get('audio_results', {})
+        
+        avg_score = (video_res.get('fake_score', 0) + audio_res.get('fake_score', 0)) / 2
+        
+        intervals.append({
+            "interval_id": interval['interval_id'],
+            "time_range": interval['interval'],
+            "start": interval['start'],
+            "end": interval['end'],
+            "video_score": video_res.get('fake_score', 0),
+            "audio_score": audio_res.get('fake_score', 0),
+            "combined_score": round(avg_score, 3),
+            "verdict": "SUSPICIOUS" if avg_score > 0.6 else "NORMAL",
+            "suspicious_regions": {
+                "video": video_res.get('suspicious_regions', []),
+                "audio": audio_res.get('suspicious_regions', [])
+            },
+            "has_face": video_res.get('face_detected', False),
+            "has_audio": audio_res.get('has_audio', False)
+        })
+    
+    return {
+        "analysis_id": analysis_id,
+        "total_intervals": len(intervals),
+        "intervals": intervals
+    }
+
+@app.get("/api/compare")
+async def compare_scores():
+    """Compare video vs audio detection rates"""
+    
+    if not analysis_history:
+        return {
+            "message": "No analysis data available",
+            "comparison": None
+        }
+    
+    video_higher = 0
+    audio_higher = 0
+    equal = 0
+    
+    for item in analysis_history:
+        scores = item["overall_scores"]
+        v_score = scores["overall_video_score"]
+        a_score = scores["overall_audio_score"]
+        
+        if v_score > a_score:
+            video_higher += 1
+        elif a_score > v_score:
+            audio_higher += 1
+        else:
+            equal += 1
+    
+    return {
+        "total_analyses": len(analysis_history),
+        "comparison": {
+            "video_better_detection": video_higher,
+            "audio_better_detection": audio_higher,
+            "equal_detection": equal
+        },
+        "percentages": {
+            "video_dominant": round((video_higher / len(analysis_history)) * 100, 1),
+            "audio_dominant": round((audio_higher / len(analysis_history)) * 100, 1),
+            "balanced": round((equal / len(analysis_history)) * 100, 1)
+        }
+    }
+
+@app.get("/api/recent-verdict")
+async def get_recent_verdict_distribution(limit: int = Query(default=20, ge=5, le=50)):
+    """Get verdict distribution for recent analyses"""
+    
+    recent = analysis_history[:limit]
+    
+    if not recent:
+        return {
+            "total": 0,
+            "deepfakes": 0,
+            "real": 0,
+            "distribution": []
+        }
+    
+    deepfakes = sum(1 for item in recent if item["verdict"] == "DEEPFAKE")
+    real = len(recent) - deepfakes
+    
+    distribution = {
+        "very_confident": 0,  
+        "confident": 0,        
+        "moderate": 0,         
+        "low": 0               
+    }
+    
+    for item in recent:
+        conf = item["confidence"]
+        if conf >= 80:
+            distribution["very_confident"] += 1
+        elif conf >= 60:
+            distribution["confident"] += 1
+        elif conf >= 40:
+            distribution["moderate"] += 1
+        else:
+            distribution["low"] += 1
+    
+    return {
+        "total": len(recent),
+        "deepfakes": deepfakes,
+        "real": real,
+        "deepfake_rate": round((deepfakes / len(recent)) * 100, 1),
+        "confidence_distribution": distribution
+    }
+
+@app.delete("/api/clear-history")
+async def clear_history():
+    """Clear analysis history (for demo reset)"""
+    global analysis_history
+    
+    count = len(analysis_history)
+    analysis_history.clear()
+    
+    for file in UPLOAD_DIR.glob("*_results.json"):
+        os.remove(file)
+    
+    return {
+        "message": "History cleared",
+        "items_removed": count
+    }
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail, "status_code": exc.status_code}
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    print(f"Error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc)}
+    )
         
